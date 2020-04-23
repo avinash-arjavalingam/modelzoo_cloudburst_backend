@@ -1,0 +1,75 @@
+from droplet.client.client import DropletConnection
+local_cloud = DropletConnection('127.0.0.1', '127.0.0.1', local=True)
+incr = lambda _, a: a + 1
+cloud_incr = local_cloud.register(incr, 'incr')
+cloud_incr(1).get()
+square = lambda _, a: a * a
+cloud_square = local_cloud.register(square, 'square')
+cloud_square(2).get()
+local_cloud.register_dag('test_dag', ['incr', 'square'], [('incr', 'square')])
+local_cloud.call_dag('test_dag', { 'incr': 1 }).get()
+
+class Testing_Class:
+	name_len = 0
+	char_array = np.array([])
+
+	def __init__(self, firstname):
+		self.name_len = len(firstname)
+		self.char_array = np.array([ord(c) for c in firstname])
+
+	def run(self, _, arg, arg2):
+		total = self.name_len + int(arg) + int(arg2)
+		self.char_array[0] = total
+		return self.char_array
+
+import json
+import numpy as np
+import torch
+import pandas as pd
+from PIL import Image
+import torchvision
+from droplet.client.client import DropletConnection
+
+def load_labels():
+	labels = None
+	with open('/hydro_test/labels.json', 'r') as f:
+		labels = {int(key):value for (key, value) in json.load(f).items()}
+	return labels
+
+class Torch_Class:
+	model_options = ['ResNet50']
+	preprocess = torchvision.transforms.Compose([
+		torchvision.transforms.Resize(256),
+		torchvision.transforms.CenterCrop(224),
+		torchvision.transforms.ToTensor(),
+		torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+	])
+	labels = load_labels()
+
+	def __init__(self, model_type):
+		if(model_type == 'ResNet50'):
+			model50 = torchvision.models.resnet50()
+			model50.load_state_dict(torch.load('/hydro_test/resnet50-19c8e357.pth'))
+			model50.eval()
+			self.model = model50
+		else:
+			raise ValueError('No model of that type')
+
+	def run(self, _, inp):
+		input_tensor = self.preprocess(inp)
+		input_batch = input_tensor.unsqueeze(0)
+		output = None
+		with torch.no_grad():
+			output = self.model(input_batch)
+		proba = torch.nn.functional.softmax(output[0], dim=0).numpy()
+		top3 = np.argsort(proba)[-3:][::-1]
+		l = [self.labels[i] for i in top3]
+		probs = [proba[i] for i in top3]
+		df = pd.DataFrame(
+			{
+				"rank": [1, 2, 3],
+				"probability": probs,
+				"category": l
+			}
+		).astype(str)
+		return df
